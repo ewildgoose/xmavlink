@@ -28,6 +28,7 @@ defmodule XMAVLink.Router do
   alias XMAVLink.Router.Routing
   alias XMAVLink.Signing
   alias XMAVLink.LocalConnection
+  alias XMAVLink.PortConnection
   alias XMAVLink.SerialConnection
   alias XMAVLink.TCPOutConnection
   alias XMAVLink.UDPInConnection
@@ -83,6 +84,8 @@ defmodule XMAVLink.Router do
     connection_supervisor: nil,
     connection_workers: %{},
     connection_worker_monitors: %{},
+    # Monitors on port-owner processes: %{reference => port_id}
+    port_monitors: %{},
     # %{socket|port|local: XMAVLink.*_Connection}
     connections: %{},
     # Connection key last observed for each MAVLink address
@@ -94,7 +97,12 @@ defmodule XMAVLink.Router do
   # Can't used qualified type as map key
   @type mavlink_address :: Types.mavlink_address()
   @type mavlink_connection :: Types.connection()
-  @type connection_key :: :local | binary | port | {port, Types.net_address(), Types.net_port()}
+  @type connection_key ::
+          :local
+          | binary
+          | port
+          | {port, Types.net_address(), Types.net_port()}
+          | {:port, term}
   @type forward_unknown_policy :: :broadcast | :local_only | :drop
   @typedoc "Delivery metadata returned by `send_message/1..3`."
   @type delivery :: %{
@@ -124,6 +132,7 @@ defmodule XMAVLink.Router do
           connection_supervisor: pid | nil,
           connection_workers: %{connection_key() => pid},
           connection_worker_monitors: %{reference => pid},
+          port_monitors: %{reference => term},
           connections: %{connection_key() => mavlink_connection()},
           routes: %{mavlink_address() => connection_key()},
           system_time_boot_ms: %{mavlink_address() => non_neg_integer}
@@ -302,6 +311,63 @@ defmodule XMAVLink.Router do
     do: GenServer.cast(router, {:unsubscribe, self()})
 
   def unsubscribe(invalid_router), do: invalid_router_ref!(invalid_router)
+
+  @doc """
+  Registers a port connection owned by `pid` (default: the calling process).
+
+  A port is a first-class router connection whose transport is an Elixir
+  process instead of a socket — the integration point for overlay transports
+  and bridges (see `XMAVLink.PortConnection`). Frames the router routes to the
+  port are sent to `pid` as `{:xmavlink_port, port_id, %XMAVLink.Frame{}}`;
+  raw wire bytes are injected with `port_inject/3`.
+
+  Routes are learned per port and split horizon applies, so frames injected
+  through a port are never routed back to it. The owner is monitored: if it
+  exits, the port and its learned routes are removed.
+
+  Returns `{:error, :already_registered}` if `port_id` is taken.
+
+  ## Example
+
+  ```
+    :ok = XMAVLink.Router.register_port(MyRouter, :overlay)
+  ```
+  """
+  @spec register_port(router_ref, term, pid) :: :ok | {:error, :already_registered}
+  def register_port(router, port_id, pid \\ self())
+
+  def register_port(router, port_id, pid) when is_router_ref(router) and is_pid(pid),
+    do: GenServer.call(router, {:register_port, port_id, pid})
+
+  def register_port(invalid_router, _port_id, _pid), do: invalid_router_ref!(invalid_router)
+
+  @doc """
+  Removes a port connection previously added with `register_port/3`, along
+  with any routes learned through it.
+  """
+  @spec unregister_port(router_ref, term) :: :ok | {:error, :not_registered}
+  def unregister_port(router, port_id) when is_router_ref(router),
+    do: GenServer.call(router, {:unregister_port, port_id})
+
+  def unregister_port(invalid_router, _port_id), do: invalid_router_ref!(invalid_router)
+
+  @doc """
+  Injects raw MAVLink wire bytes into the router as if they had been received
+  on the given port connection.
+
+  The bytes travel the same parse → validate → route pipeline as UDP
+  datagrams: original bytes (including MAVLink 2 payload truncation and
+  signatures) are preserved for forwarding, routes are learned, unknown
+  message ids follow the router's `forward_unknown` policy, and the router's
+  signing policy governs signed-frame acceptance. Asynchronous, like
+  `pack_and_send/4`. Injection to an unregistered port is dropped with a
+  debug log.
+  """
+  @spec port_inject(router_ref, term, binary) :: :ok
+  def port_inject(router, port_id, raw) when is_router_ref(router) and is_binary(raw),
+    do: GenServer.cast(router, {:port_inject, port_id, raw})
+
+  def port_inject(invalid_router, _port_id, _raw), do: invalid_router_ref!(invalid_router)
 
   @doc """
   Send a MAVLink message to one or more recipients using available
@@ -607,6 +673,48 @@ defmodule XMAVLink.Router do
      )}
   end
 
+  # Call to register_port() API
+  def handle_call({:register_port, port_id, pid}, _from, state) do
+    connection_key = {:port, port_id}
+
+    if Map.has_key?(state.connections, connection_key) do
+      {:reply, {:error, :already_registered}, state}
+    else
+      connection =
+        ConnectionRegistry.with_signing(
+          %PortConnection{port_id: port_id, pid: pid},
+          state.signing
+        )
+
+      ref = Process.monitor(pid)
+
+      {:reply, :ok,
+       struct(state,
+         connections: Map.put(state.connections, connection_key, connection),
+         port_monitors: Map.put(state.port_monitors, ref, port_id)
+       )}
+    end
+  end
+
+  # Call to unregister_port() API
+  def handle_call({:unregister_port, port_id}, _from, state) do
+    connection_key = {:port, port_id}
+
+    if Map.has_key?(state.connections, connection_key) do
+      {monitor_refs, port_monitors} =
+        Enum.split_with(state.port_monitors, fn {_ref, id} -> id == port_id end)
+
+      for {ref, _id} <- monitor_refs, do: Process.demonitor(ref, [:flush])
+
+      {:reply, :ok,
+       connection_key
+       |> ConnectionRegistry.remove_connection(state)
+       |> struct(port_monitors: Map.new(port_monitors))}
+    else
+      {:reply, {:error, :not_registered}, state}
+    end
+  end
+
   @impl true
   # Call to unsubscribe() API
   def handle_cast({:unsubscribe, pid}, state) do
@@ -617,6 +725,22 @@ defmodule XMAVLink.Router do
   # A call to pack_and_send() targeting a non-local registered name.
   def handle_cast({:local, frame}, state) do
     {:noreply, route_local(frame, state)}
+  end
+
+  # A call to port_inject() API: raw wire bytes received on a port connection.
+  def handle_cast({:port_inject, port_id, raw}, state) do
+    case state.connections[{:port, port_id}] do
+      connection = %PortConnection{} ->
+        {:noreply,
+         raw
+         |> PortConnection.handle_inject(connection, state.dialect)
+         |> update_route_info(state)
+         |> route}
+
+      nil ->
+        Logger.debug("Dropping injection into unregistered port #{inspect(port_id)}")
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -668,22 +792,18 @@ defmodule XMAVLink.Router do
     {:noreply, ConnectionRegistry.remove_connection(port, state)}
   end
 
-  # A local subscribing Elixir process or a supervised connection worker has crashed.
+  # A port owner, local subscribing Elixir process, or supervised connection
+  # worker has crashed.
   def handle_info({:DOWN, ref, :process, pid, _}, state) do
-    case Map.pop(state.connection_worker_monitors, ref) do
-      {nil, _worker_monitors} ->
-        {:noreply,
-         update_in(
-           state,
-           [Access.key!(:connections), :local],
-           &LocalConnection.subscriber_down(pid, &1)
-         )}
+    case Map.pop(state.port_monitors, ref) do
+      {nil, _port_monitors} ->
+        down_worker_or_subscriber(ref, pid, state)
 
-      {worker, worker_monitors} ->
+      {port_id, port_monitors} ->
         {:noreply,
-         state
-         |> struct(connection_worker_monitors: worker_monitors)
-         |> ConnectionRegistry.remove_connections_for_worker(worker)}
+         {:port, port_id}
+         |> ConnectionRegistry.remove_connection(state)
+         |> struct(port_monitors: port_monitors)}
     end
   end
 
@@ -820,6 +940,24 @@ defmodule XMAVLink.Router do
 
   defp reconnect_worker(nil), do: :ok
   defp reconnect_worker(worker), do: ConnectionWorker.reconnect(worker)
+
+  defp down_worker_or_subscriber(ref, pid, state) do
+    case Map.pop(state.connection_worker_monitors, ref) do
+      {nil, _worker_monitors} ->
+        {:noreply,
+         update_in(
+           state,
+           [Access.key!(:connections), :local],
+           &LocalConnection.subscriber_down(pid, &1)
+         )}
+
+      {worker, worker_monitors} ->
+        {:noreply,
+         state
+         |> struct(connection_worker_monitors: worker_monitors)
+         |> ConnectionRegistry.remove_connections_for_worker(worker)}
+    end
+  end
 
   defp update_route_info(result, state) do
     case Routing.update_route_info(result, state) do
@@ -974,4 +1112,7 @@ defmodule XMAVLink.Router do
 
   defp forward_raw(connection = %LocalConnection{}, frame),
     do: LocalConnection.forward(connection, frame)
+
+  defp forward_raw(connection = %PortConnection{}, frame),
+    do: PortConnection.forward(connection, frame)
 end

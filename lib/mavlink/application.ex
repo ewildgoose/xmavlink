@@ -7,8 +7,15 @@ defmodule XMAVLink.Application do
     router_name = Application.get_env(:xmavlink, :router_name, XMAVLink.Router) || XMAVLink.Router
 
     children =
-      [XMAVLink.Supervisor] ++
-        utility_child_specs(router_name)
+      if Application.get_env(:xmavlink, :start_default_router, true) do
+        [XMAVLink.Supervisor] ++ utility_child_specs(router_name)
+      else
+        # Embedding applications (e.g. proxies running several routers) start
+        # their own XMAVLink.Router instances. Note XMAVLink.Supervisor also
+        # owns the UART pool, so serial connections require the default
+        # supervisor (or an equivalent poolboy pool) to be running.
+        []
+      end
 
     Supervisor.start_link(children, strategy: :one_for_one)
   end
