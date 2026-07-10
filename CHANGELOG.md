@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- Added port connections: `Router.register_port/3`, `Router.unregister_port/2`,
+  and `Router.port_inject/3` let an Elixir process act as a first-class router
+  connection (for overlay transports, bridges, and protocol translators).
+  Injected raw bytes travel the standard parse → validate → route pipeline
+  (routes learned per port, split horizon, `forward_unknown` policy, signing
+  validation), and frames routed to a port are delivered to the owning process
+  as `{:xmavlink_port, port_id, %XMAVLink.Frame{}}` with original wire bytes
+  preserved. Port owners are monitored and cleaned up on exit. See
+  `XMAVLink.PortConnection`.
+- Added `config :xmavlink, start_default_router: false` for embedding
+  applications that start their own `XMAVLink.Router` instances; it disables
+  the packaged application's default router/supervisor (note serial
+  connections rely on the default supervisor's UART pool).
+
 ## 0.15.0 - 2026-06-25
 
 ### Breaking Changes
