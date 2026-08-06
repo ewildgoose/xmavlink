@@ -4,6 +4,14 @@
 
 ### Added
 
+- Added the `udpserial:<host>:<port>` connection scheme for
+  serial-to-ethernet adapters that chop a MAVLink byte stream into UDP
+  datagrams at arbitrary boundaries. Unlike `udpout:` (one-frame-per-datagram
+  semantics), `udpserial:` buffers across datagrams like the serial/TCP
+  transports: frames split across datagrams are reassembled, concatenated
+  bursts are fully delivered, garbage is skipped, and the buffer is bounded.
+  Outbound behaves like `udpout:`. See `XMAVLink.UDPSerialConnection`.
+
 - Added port connections: `Router.register_port/3`, `Router.unregister_port/2`,
   and `Router.port_inject/3` let an Elixir process act as a first-class router
   connection (for overlay transports, bridges, and protocol translators).
