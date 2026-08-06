@@ -33,6 +33,7 @@ defmodule XMAVLink.Router do
   alias XMAVLink.TCPOutConnection
   alias XMAVLink.UDPInConnection
   alias XMAVLink.UDPOutConnection
+  alias XMAVLink.UDPSerialConnection
 
   @setup_signing_message_id 256
 
@@ -872,6 +873,11 @@ defmodule XMAVLink.Router do
         udpout = %UDPOutConnection{} ->
           UDPOutConnection.handle_info(message, udpout, dialect)
 
+        # A `udpserial:` connection (byte-stream-over-UDP adapter) is also
+        # registered under its bare socket key.
+        udpserial = %UDPSerialConnection{} ->
+          UDPSerialConnection.handle_info(message, udpserial, dialect)
+
         _ ->
           case connections[{socket, address, port}] do
             connection = %UDPInConnection{} ->
@@ -1103,6 +1109,9 @@ defmodule XMAVLink.Router do
 
   defp forward_raw(connection = %UDPOutConnection{}, frame),
     do: UDPOutConnection.forward(connection, frame)
+
+  defp forward_raw(connection = %UDPSerialConnection{}, frame),
+    do: UDPSerialConnection.forward(connection, frame)
 
   defp forward_raw(connection = %TCPOutConnection{}, frame),
     do: TCPOutConnection.forward(connection, frame)

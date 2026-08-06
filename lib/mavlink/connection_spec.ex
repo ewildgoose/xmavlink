@@ -7,6 +7,7 @@ defmodule XMAVLink.ConnectionSpec do
   alias XMAVLink.TCPOutConnection
   alias XMAVLink.UDPInConnection
   alias XMAVLink.UDPOutConnection
+  alias XMAVLink.UDPSerialConnection
 
   @type t :: %{
           required(:transport) => module,
@@ -73,6 +74,9 @@ defmodule XMAVLink.ConnectionSpec do
 
   defp parse_tokens(tokens = ["udpout" | _]),
     do: %{transport: UDPOutConnection, tokens: validate_address_and_port(tokens)}
+
+  defp parse_tokens(tokens = ["udpserial" | _]),
+    do: %{transport: UDPSerialConnection, tokens: validate_address_and_port(tokens)}
 
   defp parse_tokens(tokens = ["tcpout" | _]),
     do: %{transport: TCPOutConnection, tokens: validate_address_and_port(tokens)}
