@@ -75,6 +75,25 @@ defmodule XMAVLink.ConnectionSpec do
   defp parse_tokens(tokens = ["udpout" | _]),
     do: %{transport: UDPOutConnection, tokens: validate_address_and_port(tokens)}
 
+  # udpserial takes an optional fourth token, the local port to bind: an
+  # adapter that only talks to the address it last heard from keeps
+  # talking to us across a restart when the port does not change.
+  defp parse_tokens(["udpserial", address, port, local_port]) do
+    case parse_positive_integer(local_port) do
+      :error ->
+        raise ArgumentError, message: "invalid local port #{local_port}"
+
+      parsed_local_port ->
+        [protocol, parsed_address, parsed_port] =
+          validate_address_and_port(["udpserial", address, port])
+
+        %{
+          transport: UDPSerialConnection,
+          tokens: [protocol, parsed_address, parsed_port, parsed_local_port]
+        }
+    end
+  end
+
   defp parse_tokens(tokens = ["udpserial" | _]),
     do: %{transport: UDPSerialConnection, tokens: validate_address_and_port(tokens)}
 

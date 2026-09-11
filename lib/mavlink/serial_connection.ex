@@ -42,6 +42,11 @@ defmodule XMAVLink.SerialConnection do
   end
 
   def open(["serial", port, baud], controlling_process) do
+    # Circuits.UART names devices without the directory ("ttyUSB0"); a
+    # connection string written the Unix way ("/dev/ttyUSB0") must match
+    # the same device rather than fail as not attached for ever.
+    port = String.replace_prefix(port, "/dev/", "")
+
     if Map.has_key?(UART.enumerate(), port) do
       uart = :poolboy.checkout(XMAVLink.UARTPool)
 

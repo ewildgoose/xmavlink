@@ -1,6 +1,6 @@
 defmodule XMAVLink.UDPSerialConnection do
   @moduledoc """
-  A `udpserial:<host>:<port>` connection: UDP transport carrying a MAVLink
+  A `udpserial:<host>:<port>[:<local_port>]` connection: UDP transport carrying a MAVLink
   **byte stream** rather than framed datagrams.
 
   Serial-to-ethernet adapters chop the autopilot's serial stream into UDP
@@ -45,6 +45,7 @@ defmodule XMAVLink.UDPSerialConnection do
 
   defstruct address: nil,
             port: nil,
+            local_port: 0,
             socket: nil,
             worker: nil,
             signing: nil,
@@ -53,6 +54,7 @@ defmodule XMAVLink.UDPSerialConnection do
   @type t :: %XMAVLink.UDPSerialConnection{
           address: XMAVLink.Types.net_address(),
           port: XMAVLink.Types.net_port(),
+          local_port: non_neg_integer,
           socket: port,
           worker: pid | nil,
           signing: XMAVLink.Signing.t() | nil,
@@ -130,10 +132,21 @@ defmodule XMAVLink.UDPSerialConnection do
   defp clamp_buffer(buffer),
     do: binary_part(buffer, byte_size(buffer) - @max_stream_buffer_size, @max_stream_buffer_size)
 
-  def open(["udpserial", address, port], controlling_process) do
-    case :gen_udp.open(0, [:binary, active: true] ++ family_options(address)) do
+  def open(["udpserial", address, port], controlling_process),
+    do: open(["udpserial", address, port, 0], controlling_process)
+
+  # A fixed local port (the fourth token) keeps the same address across a
+  # restart, so an adapter that only sends to the address it last heard
+  # from needs no new heartbeat to find us again. 0 = any free port.
+  def open(["udpserial", address, port, local_port], controlling_process) do
+    case :gen_udp.open(local_port, [:binary, active: true] ++ family_options(address)) do
       {:ok, socket} ->
-        :ok = Logger.info("Opened udpserial:#{format_address(address)}:#{port}")
+        {:ok, bound} = :inet.port(socket)
+
+        :ok =
+          Logger.info(
+            "Opened udpserial:#{format_address(address)}:#{port} from local port #{bound}"
+          )
 
         :ok = :gen_udp.controlling_process(socket, controlling_process)
 
@@ -143,6 +156,7 @@ defmodule XMAVLink.UDPSerialConnection do
            socket: socket,
            address: address,
            port: port,
+           local_port: local_port,
            worker: controlling_process
          )}
 

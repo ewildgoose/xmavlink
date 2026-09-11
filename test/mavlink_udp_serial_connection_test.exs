@@ -137,6 +137,34 @@ defmodule XMAVLink.UDPSerialConnectionTest do
     assert <<0xFD, _::binary>> = data
   end
 
+  test "a fourth token fixes the local port, so an adapter finds us again after a restart" do
+    {:ok, probe} = :gen_udp.open(0, [:binary])
+    {:ok, local_port} = :inet.port(probe)
+    :gen_udp.close(probe)
+
+    assert %{
+             transport: XMAVLink.UDPSerialConnection,
+             tokens: ["udpserial", {127, 0, 0, 1}, 10_002, ^local_port]
+           } = XMAVLink.ConnectionSpec.parse("udpserial:127.0.0.1:10002:#{local_port}")
+
+    assert_raise ArgumentError, ~r/invalid local port/, fn ->
+      XMAVLink.ConnectionSpec.parse("udpserial:127.0.0.1:10002:x")
+    end
+
+    {:ok, router} =
+      Router.start_link(%{
+        name: nil,
+        system: 246,
+        component: 250,
+        dialect: Common,
+        connection_strings: ["udpserial:127.0.0.1:10002:#{local_port}"]
+      })
+
+    socket = wait_for_udpserial_socket(router)
+    assert {:ok, ^local_port} = :inet.port(socket)
+    GenServer.stop(router)
+  end
+
   # --- helpers ---
 
   defp heartbeat_raw(source_system, source_component) do

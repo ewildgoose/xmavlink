@@ -11,6 +11,12 @@
   transports: frames split across datagrams are reassembled, concatenated
   bursts are fully delivered, garbage is skipped, and the buffer is bounded.
   Outbound behaves like `udpout:`. See `XMAVLink.UDPSerialConnection`.
+  An optional fourth token, `udpserial:<host>:<port>:<local_port>`, fixes
+  the local port, so an adapter that only sends to the address it last
+  heard from keeps reaching the router across a restart.
+- `serial:` connection strings accept the device with or without the
+  `/dev/` prefix (`serial:/dev/ttyUSB0:57600` and `serial:ttyUSB0:57600`
+  name the same port); Circuits.UART enumerates devices without it.
 
 - Added port connections: `Router.register_port/3`, `Router.unregister_port/2`,
   and `Router.port_inject/3` let an Elixir process act as a first-class router
