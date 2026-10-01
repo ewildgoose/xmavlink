@@ -27,6 +27,11 @@
   as `{:xmavlink_port, port_id, %XMAVLink.Frame{}}` with original wire bytes
   preserved. Port owners are monitored and cleaned up on exit. See
   `XMAVLink.PortConnection`.
+- Added `Router.port_inject/4` and the `meta` field of `XMAVLink.Frame`: a
+  term given at injection travels with the frame to the owners of the
+  other ports and to local subscribers, and never onto a socket. The router
+  does not read it. An overlay uses it to carry what it knows about a frame
+  through the router's routing. See `XMAVLink.PortConnection`.
 - Added `config :xmavlink, start_default_router: false` for embedding
   applications that start their own `XMAVLink.Router` instances; it disables
   the packaged application's default router/supervisor (note serial

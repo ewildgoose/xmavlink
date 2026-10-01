@@ -56,7 +56,11 @@ defmodule XMAVLink.Frame do
     # Original binary frame
     mavlink_1_raw: nil,
     mavlink_2_raw: nil,
-    message: nil
+    message: nil,
+    # Application data that travels with the frame inside the router and
+    # never on the wire: set by `XMAVLink.Router.port_inject/4`, delivered
+    # with the frame to port owners and local subscribers.
+    meta: nil
   ]
 
   @type message :: XMAVLink.Message.t()
@@ -79,7 +83,8 @@ defmodule XMAVLink.Frame do
           signature: XMAVLink.Frame.Signature.t() | nil,
           mavlink_1_raw: binary | nil,
           mavlink_2_raw: binary | nil,
-          message: message | nil
+          message: message | nil,
+          meta: term
         }
 
   @spec binary_to_frame_and_tail(binary) ::

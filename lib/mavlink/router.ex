@@ -363,12 +363,19 @@ defmodule XMAVLink.Router do
   signing policy governs signed-frame acceptance. Asynchronous, like
   `pack_and_send/4`. Injection to an unregistered port is dropped with a
   debug log.
-  """
-  @spec port_inject(router_ref, term, binary) :: :ok
-  def port_inject(router, port_id, raw) when is_router_ref(router) and is_binary(raw),
-    do: GenServer.cast(router, {:port_inject, port_id, raw})
 
-  def port_inject(invalid_router, _port_id, _raw), do: invalid_router_ref!(invalid_router)
+  `meta`, any term, is stored in the frame's `meta` field and travels with
+  the frame to the owners of the other ports and to local subscribers; it
+  is never sent on a socket and the router does not read it. See
+  `XMAVLink.PortConnection`.
+  """
+  @spec port_inject(router_ref, term, binary, term) :: :ok
+  def port_inject(router, port_id, raw, meta \\ nil)
+
+  def port_inject(router, port_id, raw, meta) when is_router_ref(router) and is_binary(raw),
+    do: GenServer.cast(router, {:port_inject, port_id, raw, meta})
+
+  def port_inject(invalid_router, _port_id, _raw, _meta), do: invalid_router_ref!(invalid_router)
 
   @doc """
   Send a MAVLink message to one or more recipients using available
@@ -729,12 +736,12 @@ defmodule XMAVLink.Router do
   end
 
   # A call to port_inject() API: raw wire bytes received on a port connection.
-  def handle_cast({:port_inject, port_id, raw}, state) do
+  def handle_cast({:port_inject, port_id, raw, meta}, state) do
     case state.connections[{:port, port_id}] do
       connection = %PortConnection{} ->
         {:noreply,
          raw
-         |> PortConnection.handle_inject(connection, state.dialect)
+         |> PortConnection.handle_inject(connection, state.dialect, meta)
          |> update_route_info(state)
          |> route}
 

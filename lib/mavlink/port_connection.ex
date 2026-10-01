@@ -28,6 +28,17 @@ defmodule XMAVLink.PortConnection do
 
   The registering process is monitored: if it exits, the port and any routes
   learned through it are removed.
+
+  ## Frame metadata
+
+  `XMAVLink.Router.port_inject/4` takes a fourth argument, any term, and
+  stores it in the frame's `meta` field. The router does not read it. It
+  delivers it with the frame to the owners of the other ports and to local
+  subscribers that asked for frames, and it never puts it on a socket. An
+  overlay uses it to carry what it knows about a frame (who sent it, a
+  tag that proves it) from one port to another through the router's
+  routing. Inject one frame per call when `meta` is given: it belongs to
+  the first frame in the bytes.
   """
 
   alias XMAVLink.Connection.Inbound
@@ -46,8 +57,14 @@ defmodule XMAVLink.PortConnection do
   # Parse/validate injected raw bytes on the identical code path used for UDP
   # datagrams, so route learning, unknown-message policy, and signing
   # validation behave the same as for any other connection.
-  def handle_inject(raw, connection = %PortConnection{port_id: port_id}, dialect) do
-    Inbound.datagram(raw, connection, {:port, port_id}, dialect, "port #{inspect(port_id)}")
+  def handle_inject(raw, connection = %PortConnection{port_id: port_id}, dialect, meta \\ nil) do
+    case Inbound.datagram(raw, connection, {:port, port_id}, dialect, "port #{inspect(port_id)}") do
+      {:ok, connection_key, connection, frame = %Frame{}} when meta != nil ->
+        {:ok, connection_key, connection, %Frame{frame | meta: meta}}
+
+      other ->
+        other
+    end
   end
 
   @doc false

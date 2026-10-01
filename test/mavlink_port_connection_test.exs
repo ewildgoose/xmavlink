@@ -173,6 +173,58 @@ defmodule XMAVLink.PortConnectionTest do
     end
   end
 
+  describe "frame metadata (port_inject/4)" do
+    setup :start_router_with_trap
+
+    test "meta travels with the frame to other ports and to local subscribers, never to a socket",
+         %{router: router, trap: trap} do
+      :ok = Router.register_port(router, :down)
+      :ok = Router.register_port(router, :up)
+      :ok = Router.subscribe(router, message: Common.Message.Heartbeat, as_frame: true)
+
+      raw = heartbeat_raw(1, 1)
+      meta = %{origin: 3, tag: <<1, 2, 3>>}
+      :ok = Router.port_inject(router, :down, raw, meta)
+
+      # The other port and the subscriber get the frame with its meta.
+      assert_receive {:xmavlink_port, :up, %Frame{meta: ^meta, mavlink_2_raw: ^raw}}, 500
+      assert_receive %Frame{source_system: 1, meta: ^meta}, 500
+      # Split horizon still applies, and the socket gets the wire bytes only.
+      refute_receive {:xmavlink_port, :down, _}, 200
+      assert_receive {:udp, ^trap, _ip, _port, ^raw}, 500
+    end
+
+    test "meta follows a targeted frame along a learned route", %{router: router} do
+      :ok = Router.register_port(router, :down)
+      :ok = Router.register_port(router, :up)
+      # Vehicle 1/1 lives behind :up.
+      :ok = Router.port_inject(router, :up, heartbeat_raw(1, 1))
+      assert_receive {:xmavlink_port, :down, %Frame{meta: nil}}, 500
+
+      request =
+        packed_frame(
+          %Common.Message.ParamRequestList{target_system: 1, target_component: 1},
+          255,
+          190
+        ).mavlink_2_raw
+
+      :ok = Router.port_inject(router, :down, request, {:from, "pilot"})
+
+      assert_receive {:xmavlink_port, :up, %Frame{message_id: 21, meta: {:from, "pilot"}}}, 500
+    end
+
+    test "without meta, and from other sources, the field is nil", %{router: router} do
+      :ok = Router.register_port(router, :down)
+      :ok = Router.register_port(router, :up)
+
+      :ok = Router.port_inject(router, :down, heartbeat_raw(1, 1))
+      assert_receive {:xmavlink_port, :up, %Frame{source_system: 1, meta: nil}}, 500
+
+      :ok = Router.pack_and_send(router, sample_heartbeat(), 2)
+      assert_receive {:xmavlink_port, :up, %Frame{source_system: 245, meta: nil}}, 500
+    end
+  end
+
   describe "egress (frames routed to the port owner)" do
     setup :start_plain_router
 
