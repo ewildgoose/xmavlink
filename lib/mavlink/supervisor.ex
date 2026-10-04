@@ -12,18 +12,10 @@ defmodule XMAVLink.Supervisor do
     router_name = Application.get_env(:xmavlink, :router_name, XMAVLink.Router) || XMAVLink.Router
     router_config = XMAVLink.Router.Config.from_application_env()
 
-    children =
-      [
-        :poolboy.child_spec(
-          :worker,
-          name: {:local, XMAVLink.UARTPool},
-          worker_module: Circuits.UART,
-          size: 0,
-          # How many serial ports might you need?
-          max_overflow: 10
-        ),
-        {XMAVLink.Router, router_config}
-      ] ++ heartbeat_child_specs(router_name)
+    # The UART pool the serial connections use is the application's
+    # (XMAVLink.Application), so that it is there for routers started
+    # outside this supervisor too.
+    children = [{XMAVLink.Router, router_config}] ++ heartbeat_child_specs(router_name)
 
     Supervisor.init(children, strategy: :one_for_all)
   end

@@ -42,12 +42,14 @@ defmodule XMAVLink.SerialConnection do
   end
 
   def open(["serial", port, baud], controlling_process) do
-    # Circuits.UART names devices without the directory ("ttyUSB0"); a
-    # connection string written the Unix way ("/dev/ttyUSB0") must match
-    # the same device rather than fail as not attached for ever.
+    # Circuits.UART names devices without the directory ("ttyUSB0") on
+    # Linux and with it ("/dev/cu.usbserial") on macOS; a connection
+    # string written either way must match the same device rather than
+    # fail as not attached for ever. A device the library does not list
+    # but that exists, a pseudo-terminal pair under test, is tried too.
     port = String.replace_prefix(port, "/dev/", "")
 
-    if Map.has_key?(UART.enumerate(), port) do
+    if attached?(port) do
       uart = :poolboy.checkout(XMAVLink.UARTPool)
 
       case UART.open(uart, port, speed: baud, active: true) do
@@ -72,6 +74,13 @@ defmodule XMAVLink.SerialConnection do
     else
       {:error, :not_attached}
     end
+  end
+
+  defp attached?(port) do
+    listed = UART.enumerate()
+
+    Map.has_key?(listed, port) or Map.has_key?(listed, "/dev/" <> port) or
+      File.exists?("/dev/" <> port)
   end
 
   def close(%XMAVLink.SerialConnection{uart: uart}) do
